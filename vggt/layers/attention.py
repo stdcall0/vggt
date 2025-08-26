@@ -31,6 +31,7 @@ class Attention(nn.Module):
         qk_norm: bool = False,
         fused_attn: bool = True,  # use F.scaled_dot_product_attention or not
         rope=None,
+        window_size: int = 30,
     ) -> None:
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -46,6 +47,7 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
         self.rope = rope
+        self.window_size = window_size
 
     def forward(self, x: Tensor, pos=None) -> Tensor:
         B, N, C = x.shape
@@ -57,11 +59,22 @@ class Attention(nn.Module):
             q = self.rope(q, pos)
             k = self.rope(k, pos)
 
+        # Create a local attention mask if window_size is positive
+        attn_mask = None
+        if self.window_size > 0:
+            mask = torch.ones(N, N, device=x.device, dtype=torch.bool)
+            half_window = self.window_size // 2
+            band = torch.arange(N, device=x.device)
+            mask = (band[None, :] < band[:, None] - half_window) | (band[None, :] > band[:, None] + half_window)
+            attn_mask = mask
+
         if self.fused_attn:
             x = F.scaled_dot_product_attention(q, k, v, dropout_p=self.attn_drop.p if self.training else 0.0)
         else:
             q = q * self.scale
             attn = q @ k.transpose(-2, -1)
+            if attn_mask is not None:
+                attn.masked_fill_(attn_mask, float('-inf'))
             attn = attn.softmax(dim=-1)
             attn = self.attn_drop(attn)
             x = attn @ v
