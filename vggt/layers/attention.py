@@ -13,6 +13,7 @@ import warnings
 
 from torch import Tensor
 from torch import nn
+import torch
 import torch.nn.functional as F
 
 XFORMERS_AVAILABLE = False
