@@ -66,8 +66,13 @@ class Attention(nn.Module):
             mask = torch.ones(N, N, device=x.device, dtype=torch.bool)
             half_window = self.window_size // 2
             band = torch.arange(N, device=x.device)
-            mask = (band[None, :] < band[:, None] - half_window) | (band[None, :] > band[:, None] + half_window)
-            attn_mask = mask
+            # mask = (band[None, :] < band[:, None] - half_window) | (band[None, :] > band[:, None] + half_window)
+            # Create upper and lower triangular masks
+            mask_upper = torch.triu(torch.ones(N, N, device=x.device, dtype=torch.bool), diagonal=half_window + 1)
+            mask_lower = torch.tril(torch.ones(N, N, device=x.device, dtype=torch.bool), diagonal=-half_window - 1)
+            # Combine them to get the final local attention mask
+            attn_mask = mask_upper | mask_lower
+            # attn_mask = mask
 
         if self.fused_attn:
             x = F.scaled_dot_product_attention(q, k, v, dropout_p=self.attn_drop.p if self.training else 0.0)
