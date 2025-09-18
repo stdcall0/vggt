@@ -26,12 +26,70 @@ from vggt.utils.geometry import unproject_depth_map_to_point_map
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+def convert_qkv_to_qkv_proj(state_dict):
+    """
+    Converts a state_dict with fused QKV layers to one with separate Q, K, V projections.
+    This is necessary when loading weights from a model with a single `qkv` linear layer
+    into a model that has been modified to use `q_proj`, `k_proj`, and `v_proj` layers.
+    """
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        # Check if the key belongs to a fused QKV layer's weight or bias
+        if "attn.qkv.weight" in key:
+            # The fused weight tensor has shape (3 * dim, dim)
+            # We split it into three (dim, dim) tensors for Q, K, and V
+            q_weight, k_weight, v_weight = value.chunk(3, dim=0)
+            
+            # Create new keys for the separate projection layers
+            q_key = key.replace("qkv.weight", "q_proj.weight")
+            k_key = key.replace("qkv.weight", "k_proj.weight")
+            v_key = key.replace("qkv.weight", "v_proj.weight")
+            
+            # Add the new weights to the new state_dict
+            new_state_dict[q_key] = q_weight
+            new_state_dict[k_key] = k_weight
+            new_state_dict[v_key] = v_weight
+            
+        elif "attn.qkv.bias" in key:
+            # The fused bias tensor has shape (3 * dim)
+            # We split it into three (dim,) tensors for Q, K, and V
+            q_bias, k_bias, v_bias = value.chunk(3, dim=0)
+            
+            # Create new keys for the separate projection layers
+            q_key = key.replace("qkv.bias", "q_proj.bias")
+            k_key = key.replace("qkv.bias", "k_proj.bias")
+            v_key = key.replace("qkv.bias", "v_proj.bias")
+            
+            # Add the new biases to the new state_dict
+            new_state_dict[q_key] = q_bias
+            new_state_dict[k_key] = k_bias
+            new_state_dict[v_key] = v_bias
+            
+        else:
+            # If the key is not for a QKV layer, copy it as is
+            new_state_dict[key] = value
+            
+    return new_state_dict
+
 print("Initializing and loading VGGT model...")
 # model = VGGT.from_pretrained("facebook/VGGT-1B")  # another way to load the model
 
 model = VGGT()
 _URL = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
-model.load_state_dict(torch.hub.load_state_dict_from_url(_URL))
+
+# 1. Load the original state dict from the URL.
+#    Based on the fact that loading worked before changes, we assume these keys
+#    match the model's original structure without needing prefixes.
+original_state_dict = torch.hub.load_state_dict_from_url(_URL)
+
+# 2. Convert the QKV layers.
+#    This is the ONLY modification needed. It adapts the original weights
+#    to your new model architecture which uses separate q_proj, k_proj, v_proj.
+converted_state_dict = convert_qkv_to_qkv_proj(original_state_dict)
+
+# 3. Load the converted state dict into the model.
+#    The keys should now perfectly match your modified model instance.
+model.load_state_dict(converted_state_dict)
 
 
 model.eval()
