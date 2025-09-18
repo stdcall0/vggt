@@ -76,6 +76,40 @@ class Attention(nn.Module):
 
 
 class MemEffAttention(Attention):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        qkv_bias: bool = True,
+        proj_bias: bool = True,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+        norm_layer: nn.Module = nn.LayerNorm,
+        qk_norm: bool = False,
+        fused_attn: bool = True,
+        rope=None,
+    ) -> None:
+        # We need to override the __init__ to create separate Q, K, V projections
+        # Call nn.Module's __init__ directly instead of Attention's
+        super(Attention, self).__init__()
+        assert dim % num_heads == 0, "dim should be divisible by num_heads"
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim**-0.5
+        self.fused_attn = fused_attn
+
+        # Create separate projection layers for Q, K, V
+        self.q_proj = nn.Linear(dim, dim, bias=qkv_bias)
+        self.k_proj = nn.Linear(dim, dim, bias=qkv_bias)
+        self.v_proj = nn.Linear(dim, dim, bias=qkv_bias)
+
+        self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+        self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim, bias=proj_bias)
+        self.proj_drop = nn.Dropout(proj_drop)
+        self.rope = rope
+
     def forward(
         self,
         x: torch.Tensor,
@@ -108,9 +142,14 @@ class MemEffAttention(Attention):
         v = self.v_proj(context)
 
         # Apply rotary position embeddings if they exist
-        if self.rope:
-            q = self.rope.rotate_qk(q, pos)
-            k = self.rope.rotate_qk(k, context_pos)
+        if self.rope is not None:
+            # The rope in your code seems to expect a different shape or call signature
+            # Assuming it can handle (B, N, C) shape and pos
+            q = self.rope(q, pos)
+            k = self.rope(k, context_pos)
+
+        # Normalize Q and K
+        q, k = self.q_norm(q), self.k_norm(k)
 
         # Reshape for attention
         q = q.reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
@@ -118,7 +157,9 @@ class MemEffAttention(Attention):
         v = v.reshape(B_kv, N_kv, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
 
         # Memory-efficient attention
-        x = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.attn_drop.p)
+        # Use dropout only during training
+        dropout_p = self.attn_drop.p if self.training else 0.0
+        x = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p)
         x = x.permute(0, 2, 1, 3).reshape(B, N, C)
 
         # Output projection
