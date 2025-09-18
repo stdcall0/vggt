@@ -11,9 +11,12 @@ import logging
 import os
 import warnings
 
+import torch
 from torch import Tensor
 from torch import nn
 import torch.nn.functional as F
+
+from typing import Optional
 
 XFORMERS_AVAILABLE = False
 
@@ -73,21 +76,52 @@ class Attention(nn.Module):
 
 
 class MemEffAttention(Attention):
-    def forward(self, x: Tensor, attn_bias=None, pos=None) -> Tensor:
-        assert pos is None
-        if not XFORMERS_AVAILABLE:
-            if attn_bias is not None:
-                raise AssertionError("xFormers is required for using nested tensors")
-            return super().forward(x)
-
+    def forward(
+        self,
+        x: torch.Tensor,
+        pos: Optional[torch.Tensor] = None,
+        context: Optional[torch.Tensor] = None,
+        context_pos: Optional[torch.Tensor] = None,
+        attn_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            x (torch.Tensor): Input tensor (query).
+            pos (Optional[torch.Tensor]): Position embeddings for x.
+            context (Optional[torch.Tensor]): Context tensor for key/value. If None, uses x for self-attention.
+            context_pos (Optional[torch.Tensor]): Position embeddings for context.
+            attn_mask (Optional[torch.Tensor]): Attention mask.
+        """
         B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads)
+        
+        # If context is not provided, use x for self-attention.
+        if context is None:
+            context = x
+        if context_pos is None:
+            context_pos = pos
+            
+        B_kv, N_kv, _ = context.shape
 
-        q, k, v = unbind(qkv, 2)
+        # Project q from x, and k,v from context
+        q = self.q_proj(x)
+        k = self.k_proj(context)
+        v = self.v_proj(context)
 
-        x = memory_efficient_attention(q, k, v, attn_bias=attn_bias)
-        x = x.reshape([B, N, C])
+        # Apply rotary position embeddings if they exist
+        if self.rope:
+            q = self.rope.rotate_qk(q, pos)
+            k = self.rope.rotate_qk(k, context_pos)
 
+        # Reshape for attention
+        q = q.reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        k = k.reshape(B_kv, N_kv, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        v = v.reshape(B_kv, N_kv, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+        # Memory-efficient attention
+        x = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.attn_drop.p)
+        x = x.permute(0, 2, 1, 3).reshape(B, N, C)
+
+        # Output projection
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
