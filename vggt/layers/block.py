@@ -97,11 +97,11 @@ class Block(nn.Module):
         # Apply layer scale and attention
         # Pass normalized x as query, and normalized context as key/value context
         attn_out = self.attn(self.norm1(x), pos=pos, context=self.norm1(context), context_pos=context_pos)
-        x = x + self.drop_path(self.ls1(attn_out))
+        x = x + self.drop_path1(self.ls1(attn_out))
 
         # Apply layer scale and MLP
         mlp_out = self.mlp(self.norm2(x))
-        x = x + self.drop_path(self.ls2(mlp_out))
+        x = x + self.drop_path2(self.ls2(mlp_out))
         return x
 
 
