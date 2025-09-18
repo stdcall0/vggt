@@ -74,17 +74,17 @@ class Attention(nn.Module):
         k = self.k_proj(context)
         v = self.v_proj(context)
 
-        # Apply rotary position embeddings if they exist
-        if self.rope is not None:
-            q = self.rope(q, pos)
-            k = self.rope(k, context_pos)
-
         # Reshape for attention
         q = q.reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
         k = k.reshape(B_kv, N_kv, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
         v = v.reshape(B_kv, N_kv, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
 
-        # CORRECTED: Apply QK norm AFTER reshaping to per-head format
+        # Apply rotary position embeddings if they exist (after reshaping)
+        if self.rope is not None:
+            q = self.rope(q, pos)
+            k = self.rope(k, context_pos)
+
+        # Apply QK norm (note: these expect (B, H, N, head_dim) shape)
         q, k = self.q_norm(q), self.k_norm(k)
 
         if self.fused_attn:

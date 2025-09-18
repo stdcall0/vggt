@@ -360,11 +360,20 @@ def slice_expand_and_flatten(token_tensor, B, S):
     Returns:
         torch.Tensor: Processed tokens with shape (B*S, X, C)
     """
-
-    # CORRECTED: Just slice and reshape. Do not expand.
-    C = token_tensor.shape[-1]
-    # We take the tokens from index S onwards, which are the global tokens.
-    global_tokens = token_tensor[:, S:]
-    # Reshape to (B, num_global_tokens, C)
-    return global_tokens.reshape(B, -1, C)
+    # token_tensor shape: (1, 2, X, C)
+    _, _, X, C = token_tensor.shape
+    
+    # Extract tokens for first frame and remaining frames
+    first_frame_token = token_tensor[:, 0:1, :, :]  # (1, 1, X, C)
+    remaining_frames_token = token_tensor[:, 1:2, :, :]  # (1, 1, X, C)
+    
+    # Expand to match batch size
+    first_frame_token = first_frame_token.expand(B, 1, X, C)  # (B, 1, X, C)
+    remaining_frames_token = remaining_frames_token.expand(B, S-1, X, C)  # (B, S-1, X, C)
+    
+    # Concatenate along sequence dimension
+    tokens = torch.cat([first_frame_token, remaining_frames_token], dim=1)  # (B, S, X, C)
+    
+    # Flatten to (B*S, X, C)
+    return tokens.view(B * S, X, C)
 
