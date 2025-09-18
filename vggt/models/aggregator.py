@@ -281,26 +281,68 @@ class Aggregator(nn.Module):
 
         return tokens, frame_idx, intermediates
 
-    def _process_global_attention(self, tokens, B, S, P, C, global_idx, pos=None):
+    def _process_global_attention(self, tokens, B, S, P, C, global_idx, pos=None, neighborhood_size=15):
         """
-        Process global attention blocks. We keep tokens in shape (B, S*P, C).
+        Process global attention with a sliding window approach to save memory.
+        Each frame attends to the first frame and its local neighborhood.
         """
-        if tokens.shape != (B, S * P, C):
-            tokens = tokens.view(B, S, P, C).view(B, S * P, C)
+        # Reshape tokens and pos from (B*S, ...) to (B, S, ...)
+        tokens = tokens.view(B, S, P, C)
+        if pos is not None:
+            pos = pos.view(B, S, P, 2)
 
-        if pos is not None and pos.shape != (B, S * P, 2):
-            pos = pos.view(B, S, P, 2).view(B, S * P, 2)
-
+        output_tokens_list = []
         intermediates = []
 
         # by default, self.aa_block_size=1, which processes one block at a time
-        for _ in range(self.aa_block_size):
-            if self.training:
-                tokens = checkpoint(self.global_blocks[global_idx], tokens, pos, use_reentrant=self.use_reentrant)
-            else:
-                tokens = self.global_blocks[global_idx](tokens, pos=pos)
-            global_idx += 1
-            intermediates.append(tokens.view(B, S, P, C))
+        for block_offset in range(self.aa_block_size):
+            current_block_idx = global_idx + block_offset
+            block = self.global_blocks[current_block_idx]
+            
+            # Process each frame in the sequence individually
+            for i in range(S):
+                # 1. Determine context frames for the current frame `i`
+                start = max(0, i - neighborhood_size)
+                end = min(S, i + neighborhood_size + 1)
+                
+                # Get unique indices, including the first frame and the neighborhood, then sort
+                context_indices = torch.tensor(list(set([0] + list(range(start, end)))), device=tokens.device).sort()[0]
+
+                # 2. Gather query and context tokens/positions
+                query_tokens = tokens[:, i:i+1, :, :].reshape(B, P, C) # (B, P, C)
+                context_tokens = tokens[:, context_indices, :, :].reshape(B, -1, C) # (B, K*P, C) where K is num_context_indices
+                
+                query_pos = None
+                context_pos = None
+                if pos is not None:
+                    query_pos = pos[:, i:i+1, :, :].reshape(B, P, 2)
+                    context_pos = pos[:, context_indices, :, :].reshape(B, -1, 2)
+
+                # 3. Perform attention
+                # The attention block expects `x` (query) and `context` (key/value) arguments.
+                if self.training:
+                    # checkpoint doesn't directly support passing keyword arguments like `context`.
+                    # We wrap the call in a lambda to handle this.
+                    output_frame = checkpoint(
+                        lambda q, c, q_pos, c_pos: block(x=q, context=c, pos=q_pos, context_pos=c_pos),
+                        query_tokens, context_tokens, query_pos, context_pos,
+                        use_reentrant=self.use_reentrant
+                    )
+                else:
+                    output_frame = block(x=query_tokens, context=context_tokens, pos=query_pos, context_pos=context_pos)
+
+                output_tokens_list.append(output_frame.view(B, 1, P, C))
+
+            # After processing all frames for this block, update the main tokens tensor
+            tokens = torch.cat(output_tokens_list, dim=1)
+            output_tokens_list = [] # Reset for the next block
+            
+            intermediates.append(tokens)
+
+        global_idx += self.aa_block_size
+        
+        # Reshape tokens back to the expected format for the next attention type
+        tokens = tokens.view(B * S, P, C)
 
         return tokens, global_idx, intermediates
 

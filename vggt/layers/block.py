@@ -9,7 +9,7 @@
 
 import logging
 import os
-from typing import Callable, List, Any, Tuple, Dict
+from typing import Callable, List, Any, Tuple, Dict, Optional
 import warnings
 
 import torch
@@ -74,27 +74,33 @@ class Block(nn.Module):
 
         self.sample_drop_ratio = drop_path
 
-    def forward(self, x: Tensor, pos=None) -> Tensor:
-        def attn_residual_func(x: Tensor, pos=None) -> Tensor:
-            return self.ls1(self.attn(self.norm1(x), pos=pos))
+    def forward(
+        self,
+        x: torch.Tensor,
+        pos: Optional[torch.Tensor] = None,
+        context: Optional[torch.Tensor] = None,
+        context_pos: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            x (torch.Tensor): Input tensor (query).
+            pos (Optional[torch.Tensor]): Position embeddings for x.
+            context (Optional[torch.Tensor]): Context tensor for key/value. If None, uses x for self-attention.
+            context_pos (Optional[torch.Tensor]): Position embeddings for context.
+        """
+        # If context is not provided, default to self-attention
+        if context is None:
+            context = x
+        if context_pos is None:
+            context_pos = pos
 
-        def ffn_residual_func(x: Tensor) -> Tensor:
-            return self.ls2(self.mlp(self.norm2(x)))
+        # Apply layer scale and attention
+        attn_out = self.attn(self.norm1(x), pos=pos, context=self.norm1(context), context_pos=context_pos)
+        x = x + self.drop_path(self.ls1(attn_out))
 
-        if self.training and self.sample_drop_ratio > 0.1:
-            # the overhead is compensated only for a drop path rate larger than 0.1
-            x = drop_add_residual_stochastic_depth(
-                x, pos=pos, residual_func=attn_residual_func, sample_drop_ratio=self.sample_drop_ratio
-            )
-            x = drop_add_residual_stochastic_depth(
-                x, residual_func=ffn_residual_func, sample_drop_ratio=self.sample_drop_ratio
-            )
-        elif self.training and self.sample_drop_ratio > 0.0:
-            x = x + self.drop_path1(attn_residual_func(x, pos=pos))
-            x = x + self.drop_path1(ffn_residual_func(x))  # FIXME: drop_path2
-        else:
-            x = x + attn_residual_func(x, pos=pos)
-            x = x + ffn_residual_func(x)
+        # Apply layer scale and MLP
+        mlp_out = self.mlp(self.norm2(x))
+        x = x + self.drop_path(self.ls2(mlp_out))
         return x
 
 
