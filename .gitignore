@@ -1,3 +1,5 @@
+KITTI-360-sample/
+
 .hydra/
 output/
 ckpt/
