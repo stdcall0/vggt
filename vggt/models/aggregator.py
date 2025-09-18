@@ -361,13 +361,10 @@ def slice_expand_and_flatten(token_tensor, B, S):
         torch.Tensor: Processed tokens with shape (B*S, X, C)
     """
 
-    # Slice out the "query" tokens => shape (1, 1, ...)
-    query = token_tensor[:, 0:1, ...].expand(B, 1, *token_tensor.shape[2:])
-    # Slice out the "other" tokens => shape (1, S-1, ...)
-    others = token_tensor[:, 1:, ...].expand(B, S - 1, *token_tensor.shape[2:])
-    # Concatenate => shape (B, S, ...)
-    combined = torch.cat([query, others], dim=1)
+    # CORRECTED: Just slice and reshape. Do not expand.
+    C = token_tensor.shape[-1]
+    # We take the tokens from index S onwards, which are the global tokens.
+    global_tokens = token_tensor[:, S:]
+    # Reshape to (B, num_global_tokens, C)
+    return global_tokens.reshape(B, -1, C)
 
-    # Finally flatten => shape (B*S, ...)
-    combined = combined.view(B * S, *combined.shape[2:])
-    return combined
