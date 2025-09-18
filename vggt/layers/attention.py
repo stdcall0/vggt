@@ -74,9 +74,6 @@ class Attention(nn.Module):
         k = self.k_proj(context)
         v = self.v_proj(context)
 
-        # Normalize Q and K
-        q, k = self.q_norm(q), self.k_norm(k)
-
         # Apply rotary position embeddings if they exist
         if self.rope is not None:
             q = self.rope(q, pos)
@@ -86,6 +83,9 @@ class Attention(nn.Module):
         q = q.reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
         k = k.reshape(B_kv, N_kv, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
         v = v.reshape(B_kv, N_kv, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+        # CORRECTED: Apply QK norm AFTER reshaping to per-head format
+        q, k = self.q_norm(q), self.k_norm(k)
 
         if self.fused_attn:
             # Use dropout only during training
@@ -106,7 +106,5 @@ class Attention(nn.Module):
         return x
 
 
-# MemEffAttention now simply inherits from the modified Attention class.
-# Its main purpose might be just for naming or if it had other specific logic.
 class MemEffAttention(Attention):
     pass
