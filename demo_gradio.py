@@ -76,12 +76,18 @@ print("Initializing and loading VGGT model...")
 
 model = VGGT()
 _URL = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
-# Load the original state dict
+
+# 1. Load the original state dict from the URL
 original_state_dict = torch.hub.load_state_dict_from_url(_URL)
-# Convert the state dict to match the new architecture
-converted_state_dict = convert_qkv_to_qkv_proj(original_state_dict)
-# Load the converted state dict
-model.load_state_dict(converted_state_dict)
+
+# 2. Add the 'aggregator.' prefix to all keys to match the model's structure.
+#    The VGGT class wraps the main modules under 'self.aggregator'.
+prefixed_state_dict = {"aggregator." + k: v for k, v in original_state_dict.items()}
+
+# 3. Load the state dict with the correct prefixes.
+#    We are NO LONGER converting from qkv to q_proj, etc., because the error
+#    indicates the model is expecting the original 'qkv' layers.
+model.load_state_dict(prefixed_state_dict)
 
 
 model.eval()
