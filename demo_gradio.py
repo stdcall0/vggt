@@ -77,29 +77,18 @@ print("Initializing and loading VGGT model...")
 model = VGGT()
 _URL = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
 
-# 1. Load the original state dict from the URL. It has flat keys like 'frame_blocks...'
+# 1. Load the original state dict from the URL.
+#    Based on the fact that loading worked before changes, we assume these keys
+#    match the model's original structure without needing prefixes.
 original_state_dict = torch.hub.load_state_dict_from_url(_URL)
 
-# 2. Create a new state_dict and add the correct module prefixes.
-#    The VGGT model class has `self.aggregator` and `self.camera_head`.
-#    We need to map the flat keys to these modules.
-prefixed_state_dict = {}
-for k, v in original_state_dict.items():
-    # Keys for the camera head in the original file start with 'trunk.' or 'head.'
-    if k.startswith("trunk.") or k.startswith("head."):
-        prefixed_state_dict["camera_head." + k] = v
-    else:
-        # All other keys (like 'frame_blocks...', 'global_blocks...') belong to the aggregator
-        prefixed_state_dict["aggregator." + k] = v
+# 2. Convert the QKV layers.
+#    This is the ONLY modification needed. It adapts the original weights
+#    to your new model architecture which uses separate q_proj, k_proj, v_proj.
+converted_state_dict = convert_qkv_to_qkv_proj(original_state_dict)
 
-# 3. Now, convert the QKV layers in the correctly prefixed state_dict.
-#    Your modified model code expects 'q_proj', 'k_proj', 'v_proj' layers.
-#    This function will convert '...attn.qkv.weight' to '...attn.q_proj.weight' etc.
-converted_state_dict = convert_qkv_to_qkv_proj(prefixed_state_dict)
-
-# 4. Load the fully converted state dict into the model.
-#    The keys in `converted_state_dict` should now perfectly match the names and structure
-#    of the layers in your modified `model` instance.
+# 3. Load the converted state dict into the model.
+#    The keys should now perfectly match your modified model instance.
 model.load_state_dict(converted_state_dict)
 
 
